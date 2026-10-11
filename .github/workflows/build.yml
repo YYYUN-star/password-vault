@@ -79,19 +79,40 @@ jobs:
       - name: 编译验证
         # 模拟器 SDK 不需要签名，所以这一步在任何 fork / PR 上都能跑通。
         #
-        # 这里**刻意不加 -quiet**。
-        # 第一版加了 -quiet，结果编译失败时日志里几乎什么都没有，
-        # 而 CI 日志是唯一能拿到真实错误的途径（我没有 Mac，本地无法编译）。
-        # 代价是输出变长，所以把它导到文件、只把错误和警告筛出来打印：
-        # 既保留完整日志（失败时作为 artifact 上传），又让关键行一眼可见。
+        # 这里**刻意不加 -quiet**：CI 日志是唯一能拿到真实错误的途径
+        # （开发机上没有 Mac）。日志同时导到文件和几个回显点，
+        # 因为 artifact 下载需要登录，而日志末尾的直接回显不需要。
         env:
           SCHEME: ${{ steps.cfg.outputs.scheme }}
         run: |
           set -o pipefail
+
+          # 先确认环境：工程和目标是否真的存在，scheme 名字对不对。
+          # 上一轮 13 秒就失败、日志只有 0.7KB，说明失败发生在进入编译之前，
+          # 所以这些"显而易见"的信息必须先打出来。
+          echo "==================== 环境信息 ===================="
+          xcodebuild -version
+          echo
+          echo "--- 工作目录 ---"
+          pwd
+          ls -la
+          echo
+          echo "--- xcodeproj 是否存在 ---"
+          ls -d *.xcodeproj || echo "!!! 没有找到 xcodeproj"
+          echo
+          echo "--- 可用 scheme ---"
+          xcodebuild -project PasswordVault.xcodeproj -list 2>&1 || true
+          echo
+          echo "--- 可用 SDK（只看 iOS 模拟器相关）---"
+          xcodebuild -showsdks 2>&1 | grep -i simulator || echo "!!! 没有模拟器 SDK"
+          echo "=================================================="
+          echo
+
+          # 编译。用明确的 destination 而不是 -sdk，并跳过包校验。
           xcodebuild build \
             -project PasswordVault.xcodeproj \
             -scheme "$SCHEME" \
-            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
             -configuration Debug \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
@@ -101,12 +122,18 @@ jobs:
 
           echo
           echo "==================== 错误与警告 ===================="
-          # 只保留编译器诊断行，去掉几千行无关噪音
           grep -nE 'error:|warning:|note:' /tmp/xcodebuild.log | head -200 || true
           echo "===================================================="
           echo
+          echo "退出码：$STATUS"
           echo "日志总行数：$(wc -l < /tmp/xcodebuild.log)"
           echo "错误条数：$(grep -cE 'error:' /tmp/xcodebuild.log || true)"
+          echo
+          # artifact 下载要登录，所以把日志末尾直接回显到 CI 页面。
+          # 编译错误总是出现在末尾附近，这一段足以定位大部分问题。
+          echo "==================== 日志末尾 80 行 ===================="
+          tail -n 80 /tmp/xcodebuild.log || true
+          echo "======================================================="
           exit $STATUS
 
       - name: 上传编译日志（失败时）
