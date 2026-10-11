@@ -78,10 +78,16 @@ jobs:
 
       - name: 编译验证
         # 模拟器 SDK 不需要签名，所以这一步在任何 fork / PR 上都能跑通。
+        #
+        # 这里**刻意不加 -quiet**。
+        # 第一版加了 -quiet，结果编译失败时日志里几乎什么都没有，
+        # 而 CI 日志是唯一能拿到真实错误的途径（我没有 Mac，本地无法编译）。
+        # 代价是输出变长，所以把它导到文件、只把错误和警告筛出来打印：
+        # 既保留完整日志（失败时作为 artifact 上传），又让关键行一眼可见。
         env:
           SCHEME: ${{ steps.cfg.outputs.scheme }}
         run: |
-          set -euo pipefail
+          set -o pipefail
           xcodebuild build \
             -project PasswordVault.xcodeproj \
             -scheme "$SCHEME" \
@@ -90,7 +96,27 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            -quiet
+            2>&1 | tee /tmp/xcodebuild.log
+          STATUS=${PIPESTATUS[0]}
+
+          echo
+          echo "==================== 错误与警告 ===================="
+          # 只保留编译器诊断行，去掉几千行无关噪音
+          grep -nE 'error:|warning:|note:' /tmp/xcodebuild.log | head -200 || true
+          echo "===================================================="
+          echo
+          echo "日志总行数：$(wc -l < /tmp/xcodebuild.log)"
+          echo "错误条数：$(grep -cE 'error:' /tmp/xcodebuild.log || true)"
+          exit $STATUS
+
+      - name: 上传编译日志（失败时）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log
+          path: /tmp/xcodebuild.log
+          if-no-files-found: warn
+          retention-days: 14
 
       # ------------------------------------------------------------------
       # 判断有没有签名材料。
