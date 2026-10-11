@@ -1,7 +1,31 @@
 # 密码库（PasswordVault）
 
 一个只给自己用的 iOS 密码管理器。原生 SwiftUI，无第三方依赖，无服务器，无账号。
-**不需要付费 Apple 开发者账号。**
+
+---
+
+## ⚠️ 项目状态：已搁浅（2026-10-11）
+
+**代码写完了（3083 行 Swift），但无法编译、签名、安装到 iPhone。**
+
+原因是**没有 Mac**：
+
+```
+编译（需 Mac）→ 签名（需 Mac + Apple ID）→ 打包 ipa → 装机
+     ↑ 借云端 CI 能解决         ↑ 这一步从一开始就是断的
+```
+
+- 有 Mac 的那天，用 Xcode 打开这个工程、连上手机跑一次就能装到手机上
+- **要看复盘和教训，请从 [`知识库/README.md`](知识库/README.md) 开始**
+
+关于这次失败最该记住的一句话：
+
+> **先验证那个"不可逆、不可替代"的前提，再写第一行代码。**
+> 这个项目的前提取决于一句没问出口的话：**"你有没有 Mac？"**
+
+---
+
+## 代码本身的设计（这部分是对的，可复用）
 
 **先说结论（三个最容易判断错的地方）：**
 
@@ -15,8 +39,6 @@
 **一个容易误判的成本**：免费签名 **7 天过期**，但**数据不会丢**。
 App 图标变灰点不开，重新签名装回去（别选"卸载"）一切照旧。
 用 AltStore + AltServer 可以自动续签，日常基本感知不到。
-
----
 
 ## 三分钟了解它做了什么
 
@@ -55,33 +77,39 @@ CloudKit 级别的记录合并需要付费账号，还要处理冲突、墓碑�
 内存取证、键盘记录器、以及**你自己把主密码写在便利贴上**。
 最后一条的发生概率远高于其他所有技术攻击。
 
-**5. 我不声称它在真机上一定能装上。**
-这套代码是在 Windows 上写的，我没有 Mac 可以实际编译安装一次。
-工程配置上我把所有可能引起免费签名失败的东西都去掉了
-（entitlements 是空的），但签名环节如果有问题，把报错发我，我按报错改。
+**5. 这套代码从未被真正的苹果编译器检查过。**
+CI 曾在 GitHub Actions 上跑起来，但第 7 步「编译验证」失败，
+而 CI 日志需要登录才能读，加上 `github.com` 网页不可达，
+始终没能拿到具体错误。所以它**可能只是几个小语法错误**，
+也**可能**还有更深的问题——有 Mac 之后第一件事就是编译一遍。
 
-## 快速开始
+## 快速开始（有 Mac 之后）
 
 ```bash
-# 1. 改 Bundle ID：把 com.example 换成你自己的（只需改 project.yml 两处）
-
-# 2. 推上 GitHub
-git init && git add . && git commit -m "v0.2"
-git remote add origin git@github.com:你/password-vault.git
-git push -u origin main
+brew install xcodegen
+xcodegen generate
+open PasswordVault.xcodeproj
 ```
 
-CI 会自动编译验证（**不需要任何签名配置**）。
-之后按 `docs/SETUP.md` 拿到可安装的 ipa → 装到手机。
-
-**装完必须做**：创建库后立刻导出一次备份，并**验证它能恢复**。
+Xcode 会自动处理免费账号的签名，连上 iPhone 直接跑即可。
+`project.yml` 是唯一事实来源，`.xcodeproj` 是生成物，不要手动改。
 
 ## 文档
 
+**知识库（先读这个）**
+- [`知识库/README.md`](知识库/README.md) — 导航 + 技术速查表
+- [`知识库/经验教训.md`](知识库/经验教训.md) — ⭐ 完整复盘
+- [`知识库/ios密码库-设计要点.md`](知识库/ios密码库-设计要点.md) — 加密方案设计理由
+
+**规划记录**
+- [`规划记录/决策记录.md`](规划记录/决策记录.md) — 三阶段决策时间线 + 时间分配复盘
+- [`规划记录/上手指南.md`](规划记录/上手指南.md) — 零基础操作指南（含真实踩坑）
+
+**工程文档**
 - [`docs/PAID_FEATURES.md`](docs/PAID_FEATURES.md) — **哪些能力需要付费账号。加功能前先查这里**
-- [`docs/SETUP.md`](docs/SETUP.md) — 从零到装上手机，含签名、续签、排错清单
+- [`docs/SETUP.md`](docs/SETUP.md) — 构建与安装，含签名、续签、排错清单
 - [`docs/SECURITY.md`](docs/SECURITY.md) — 威胁模型：防什么、不防什么、已知妥协
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — 分层、数据流、设计决策速查、版本变更记录
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — 分层、数据流、设计决策速查
 
 ## 工程约束
 
@@ -91,3 +119,5 @@ CI 会自动编译验证（**不需要任何签名配置**）。
 - `project.yml` 是唯一事实来源，`.xcodeproj` 是生成物，**不入库**
 - `Sources/Shared` 里没有一行 SwiftUI 界面代码（只有 `ObservableObject`
   和 `UIPasteboard` 这类非界面依赖），`Sources/App` 里没有一行密码学
+- `tools/` 是本地 Windows 辅助脚本，不进 git（见 `.gitignore`）
+

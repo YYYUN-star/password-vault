@@ -32,13 +32,8 @@ Package.resolved
 
 # 本地安装辅助脚本 —— 只在你这台 Windows 电脑上有意义，
 # 和 iOS 工程本身无关，所以不进仓库（GitHub 上也只认能编译的东西）。
-# 注意：这几个文件仍然留在你的磁盘上，只是不参与提交。
-一键配置.bat
-设置BundleID.ps1
-配置GitHub连接.ps1
-settings-bundleid.ps1
-config-github.ps1
-_msgtable.ps1
+# 注意：整个 tools/ 目录仍然留在你的磁盘上，只是不参与提交。
+tools/
 
 # 脚本运行时会生成 project.yml 的带时间戳备份；那是本地保险，不是成果
 *.bak-*
