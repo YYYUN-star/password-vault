@@ -1,0 +1,206 @@
+# GitHub Actions：在云端 macOS 上编译这个 iOS 工程。
+#
+# 为什么需要它：你在 Windows 上，本机装不了 Xcode。
+# 这个工作流承担两个职责：
+#   1. **每次提交都验证代码能编译**（没有签名也能编译，这一步永远会跑）；
+#   2. 配好签名密钥后，产出一个可以装到 iPhone 上的 ipa。
+#
+# 详细的证书准备步骤见 docs/SETUP.md。
+
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    # macos-14 自带 Xcode 15.x，能编 iOS 17。
+    # 不要用 macos-latest：它随时可能跳到更新的 Xcode，
+    # 某天早上你会突然发现构建挂了而代码一行没改。
+    runs-on: macos-14
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 选择 Xcode 版本
+        run: |
+          set -euo pipefail
+          # 固定 Xcode 版本 = 可复现的构建。
+          # 用 ls 找而不是硬编码路径：runner 镜像的次版本号会变，
+          # 硬编码 /Applications/Xcode_15.4.app 会在镜像更新后直接失效。
+          CANDIDATE=$(ls -d /Applications/Xcode_15.*.app 2>/dev/null | sort -V | tail -1)
+          if [ -z "$CANDIDATE" ]; then CANDIDATE=$(ls -d /Applications/Xcode*.app | sort -V | tail -1); fi
+          echo "使用 $CANDIDATE"
+          sudo xcode-select -switch "$CANDIDATE"
+          xcodebuild -version
+
+      - name: 安装 XcodeGen
+        run: |
+          set -euo pipefail
+          brew install xcodegen
+
+      - name: 生成 Xcode 工程
+        run: |
+          set -euo pipefail
+          # .xcodeproj 不入库：它是生成物，入库会导致合并冲突和
+          # "看起来改了其实没改"的假 diff。
+          xcodegen generate
+          ls -d *.xcodeproj
+
+      - name: 工程自检
+        id: cfg
+        run: |
+          set -euo pipefail
+          # scheme 名固定，作为 output 传给后面的构建步骤，
+          # 避免把 "PasswordVault" 这个字符串散落在四处。
+          echo "scheme=PasswordVault" >> "$GITHUB_OUTPUT"
+
+          echo "=== 工程结构 ==="
+          find Sources -name '*.swift' | sort
+          echo
+          echo "Swift 总行数：$(find Sources -name '*.swift' -exec cat {} + | wc -l)"
+
+          # 这条断言很便宜，但能挡住一类很难查的问题：
+          # 如果 entitlements 里被塞进了需要付费账号的能力，
+          # 免费签名的构建会在签名阶段失败，而错误信息通常指向别处。
+          echo
+          echo "=== entitlements 检查 ==="
+          if grep -qE 'autofill-credential-provider|application-groups|icloud' \
+               Config/PasswordVault.entitlements; then
+            echo "::error::entitlements 里出现了需要付费开发者账号的能力，见 docs/PAID_FEATURES.md"
+            exit 1
+          fi
+          echo "entitlements 干净（无需付费账号的能力）"
+
+      - name: 编译验证
+        # 模拟器 SDK 不需要签名，所以这一步在任何 fork / PR 上都能跑通。
+        env:
+          SCHEME: ${{ steps.cfg.outputs.scheme }}
+        run: |
+          set -euo pipefail
+          xcodebuild build \
+            -project PasswordVault.xcodeproj \
+            -scheme "$SCHEME" \
+            -sdk iphonesimulator \
+            -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            -quiet
+
+      # ------------------------------------------------------------------
+      # 判断有没有签名材料。
+      #
+      # 为什么单独开一步：GitHub Actions **不允许**在 if 表达式里引用
+      # secrets，也不允许在 if 里对 env 做 == '' 之外的复杂判断。
+      # 把结论算成 step output，后面的步骤就能干净地依赖它。
+      # ------------------------------------------------------------------
+      - name: 检查签名材料
+        id: signing
+        env:
+          CERT: ${{ secrets.SIGNING_CERT_P12_BASE64 }}
+        run: |
+          if [ -n "$CERT" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "检测到签名证书，将产出可安装的 ipa。"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "未配置签名证书，只做编译验证（这是完全正常的默认状态）。"
+          fi
+
+      # ------------------------------------------------------------------
+      # 路径 B：有签名密钥 → 归档并导出 ipa
+      # （编译验证在上面那个「工程自检」后面的步骤里已经无条件跑过了，
+      #   所以这里不需要再判断"没签名时改跑什么"。）
+      # ------------------------------------------------------------------
+      - name: 导入签名证书
+        if: steps.signing.outputs.available == 'true'
+        env:
+          SIGNING_CERT_P12_BASE64: ${{ secrets.SIGNING_CERT_P12_BASE64 }}
+          SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # 用一次性 keychain，构建结束随 runner 一起消失，
+          # 证书不会留在这个 runner 的任何持久化位置。
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -lut 3600 build.keychain
+          echo "$SIGNING_CERT_P12_BASE64" | base64 --decode > /tmp/cert.p12
+          security import /tmp/cert.p12 -k build.keychain \
+            -P "$SIGNING_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: \
+            -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          rm -f /tmp/cert.p12
+
+      - name: 安装描述文件
+        if: steps.signing.outputs.available == 'true'
+        env:
+          PROVISIONING_PROFILE_BASE64: ${{ secrets.PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          echo "$PROVISIONING_PROFILE_BASE64" | base64 --decode \
+            > ~/Library/MobileDevice/Provisioning\ Profiles/profile.mobileprovision
+
+      - name: 归档并导出 ipa
+        if: steps.signing.outputs.available == 'true'
+        env:
+          DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
+          CODE_SIGN_IDENTITY: ${{ secrets.CODE_SIGN_IDENTITY }}
+          PROVISIONING_PROFILE_SPECIFIER: ${{ secrets.PROVISIONING_PROFILE_SPECIFIER }}
+        run: |
+          set -euo pipefail
+          xcodebuild archive \
+            -project PasswordVault.xcodeproj \
+            -scheme PasswordVault \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/PasswordVault.xcarchive \
+            -configuration Release \
+            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="$CODE_SIGN_IDENTITY" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROVISIONING_PROFILE_SPECIFIER"
+
+          # ExportOptions 现场生成而不是入库：
+          # 里面的 teamID 是账号相关信息，不该进 git 历史。
+          # 注意缩进 —— plist 的 <dict> 内不能有 YAML heredoc 的缩进符。
+          cat > build/ExportOptions.plist <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>method</key><string>development</string>
+  <key>teamID</key><string>${DEVELOPMENT_TEAM}</string>
+  <key>signingStyle</key><string>manual</string>
+  <key>compileBitcode</key><false/>
+  <key>stripSwiftSymbols</key><true/>
+</dict>
+</plist>
+PLIST
+
+          xcodebuild -exportArchive \
+            -archivePath build/PasswordVault.xcarchive \
+            -exportOptionsPlist build/ExportOptions.plist \
+            -exportPath build/ipa
+
+      - name: 上传 ipa
+        if: steps.signing.outputs.available == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: PasswordVault-ipa
+          path: build/ipa/*.ipa
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: 清理 keychain
+        if: always() && steps.signing.outputs.available == 'true'
+        env:
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          security delete-keychain build.keychain || true

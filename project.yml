@@ -1,0 +1,81 @@
+# XcodeGen 工程定义。
+# 为什么用 XcodeGen：你在 Windows 上，没有 Mac 也没有 Xcode 可以点。
+# 手写 .xcodeproj/project.pbxproj 的 UUID 极易出错，而 project.yml 是纯文本、可 review、可 diff。
+# CI（GitHub Actions 的 macOS runner）里跑 `xcodegen generate` 就能得到可编译的真工程。
+#
+# ┌──────────────────────────────────────────────────────────────────┐
+# │ 这个工程只需要免费 Apple ID，不需要 $99 开发者账号。              │
+# │ 唯一需要付费账号的功能（Safari 自动填充）已于 v0.2 移除。         │
+# │ 将来若想加回需要付费能力的功能，先看 docs/PAID_FEATURES.md。      │
+# └──────────────────────────────────────────────────────────────────┘
+
+name: PasswordVault
+
+options:
+  bundleIdPrefix: com.fang          # ← 改成你自己的，必须全局唯一（见 docs/SETUP.md）
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+  defaultConfig: Debug
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    # 只出 arm64：不生成 x86_64 切片，避免在 Intel Mac 上跑 KDF 基准测试得出错误结论
+    ARCHS: arm64
+    ONLY_ACTIVE_ARCH: NO
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    CLANG_ENABLE_MODULES: YES
+    # 关闭 ENABLE_BITCODE：iOS 早已弃用，开了只是噪音
+    ENABLE_BITCODE: NO
+    # 不让 Xcode 自动改签名，签名策略统一由 CI 的 xcodebuild 参数决定
+    CODE_SIGN_STYLE: Manual
+    DEVELOPMENT_TEAM: ""               # ← 在 CI secrets 里注入，或本地填你的 Team ID
+
+targets:
+  PasswordVault:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/Shared
+      - path: Sources/App
+    dependencies:
+      - sdk: Security.framework
+      - sdk: LocalAuthentication.framework
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.fang.passwordvault
+        PRODUCT_NAME: PasswordVault
+        MARKETING_VERSION: "0.2.0"
+        CURRENT_PROJECT_VERSION: "1"
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_CFBundleDisplayName: 密码库
+        # 只支持 iPhone 竖屏：单栏列表 + 表单，横屏没有价值，少一种布局就少一类 bug
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
+        # 空的 entitlements 是有意的：这个 App 不需要任何特殊能力。
+        # 每多一个 entitlement 就多一处签名失败的可能，见 docs/PAID_FEATURES.md。
+        CODE_SIGN_ENTITLEMENTS: Config/PasswordVault.entitlements
+        SWIFT_EMIT_LOC_STRINGS: YES
+    info:
+      path: Config/PasswordVault-Info.plist
+      properties:
+        CFBundleDisplayName: 密码库
+        CFBundleShortVersionString: "0.2.0"
+        CFBundleVersion: "1"
+        ITSAppUsesNonExemptEncryption: false
+        LSRequiresIPhoneOS: true
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        # 让「文件」App 认识 .pvault 备份文件，导出后可以直接存到 iCloud Drive
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: com.fang.passwordvault.backup
+            UTTypeDescription: 密码库加密备份
+            UTTypeConformsTo:
+              - public.data
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - pvault

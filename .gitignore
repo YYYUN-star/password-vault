@@ -1,0 +1,46 @@
+# Xcode 工程是 `project.yml` 生成的，不入库。
+*.xcodeproj/
+*.xcworkspace/
+
+# 构建产物
+build/
+DerivedData/
+*.ipa
+*.xcarchive
+*.dSYM.zip
+
+# 签名材料 —— 这些绝对不能进版本库
+*.p12
+*.mobileprovision
+*.cer
+ExportOptions.plist
+Secrets.xcconfig
+
+# 用户自己的密码库文件（万一有人把它放进仓库目录）
+*.pwvault
+
+# macOS / Xcode
+.DS_Store
+xcuserdata/
+*.xcuserstate
+*.moved-aside
+
+# Swift Package Manager（当前没有依赖，留着以防将来加）
+.build/
+.swiftpm/
+Package.resolved
+
+# 本地安装辅助脚本 —— 只在你这台 Windows 电脑上有意义，
+# 和 iOS 工程本身无关，所以不进仓库（GitHub 上也只认能编译的东西）。
+# 注意：这几个文件仍然留在你的磁盘上，只是不参与提交。
+一键配置.bat
+设置BundleID.ps1
+配置GitHub连接.ps1
+settings-bundleid.ps1
+config-github.ps1
+_msgtable.ps1
+
+# 脚本运行时会生成 project.yml 的带时间戳备份；那是本地保险，不是成果
+*.bak-*
+*.orig
+*.rej
