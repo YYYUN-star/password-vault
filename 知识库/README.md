@@ -28,7 +28,7 @@
 ## 目录结构
 
 ```
-D:\Deek\手机端\
+D:\Deek\手机端\苹果密码管理App-失败版\
 ├── README.md                    项目总览
 ├── project.yml                  工程定义（xcodegen 用）
 ├── Config/
